@@ -50,7 +50,7 @@ class MultimodalModel(nn.Module):
         self.image_proj = nn.Linear(self.image_encoder.num_features, config.HIDDEN_DIM)
 
         self.classifier = nn.Sequential(
-            nn.Linear(config.HIDDEN_DIM*2 + 1, config.HIDDEN_DIM),
+            nn.Linear(config.HIDDEN_DIM * 2 , config.HIDDEN_DIM),
             nn.LayerNorm(config.HIDDEN_DIM),
             nn.ReLU(),
             nn.Dropout(0.15),
@@ -59,14 +59,14 @@ class MultimodalModel(nn.Module):
             nn.Linear(config.HIDDEN_DIM // 2, 1)
         )
 
-    def forward(self, input_ids, attention_mask, image, mass):
+    def forward(self, input_ids, attention_mask, image):
         text_features = self.text_encoder(input_ids, attention_mask).last_hidden_state[:,  0, :]
         image_features = self.image_encoder(image)
 
         text_emb = self.text_proj(text_features)
         image_emb = self.image_proj(image_features)
 
-        fused_emb = torch.cat([text_emb, image_emb, mass.unsqueeze(1)], dim=1)
+        fused_emb = torch.cat([text_emb, image_emb], dim=1)
 
         return self.classifier(fused_emb)
     
@@ -113,27 +113,31 @@ def train(config, device, train_df, test_df):
 
     metric_train = torchmetrics.MeanAbsoluteError().to(device)
     metric_val = torchmetrics.MeanAbsoluteError().to(device)
-    best_val = 0.0
+    best_val = 1e9
 
     print("training started")
     for epoch in range(config.EPOCHS):
         model.train()
         total_loss = 0.0
 
-        for batch in train_loader:
-            optimizer.zero_grad()
+        optimizer.zero_grad()
+
+        for i, batch in enumerate(train_loader):
             preds = model(
                 batch['input_ids'].to(device), 
                 batch['attention_mask'].to(device),
                 batch['image'].to(device), 
-                batch['total_mass'].to(device)
+                # batch['total_mass'].to(device)
             ).view(-1)
-            metric_train.update(preds, batch['label'].to(device))
+            metric_train.update(preds*batch['total_mass'].to(device), batch['total_calories'].to(device))
             loss = criterion(preds, batch['label'].to(device))
             loss.backward()
-            optimizer.step()
-
             total_loss += loss.item()
+
+            if (i+1) % 32 == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+
 
         # Валидация
         train_mae = metric_train.compute()
@@ -145,7 +149,7 @@ def train(config, device, train_df, test_df):
             f"Epoch {epoch}/{config.EPOCHS-1} | avg_Loss: {total_loss/len(train_loader):.4f} | Train F1: {train_mae :.4f}| Val F1: {val_mae :.4f}"
         )
 
-        if val_mae > best_val:
+        if val_mae < best_val:
             print(f"New best model, epoch: {epoch}")
             best_val = val_mae
             torch.save(model.state_dict(), config.SAVE_PATH)
@@ -159,8 +163,8 @@ def validate(model, val_loader, device, metric):
                     batch['input_ids'].to(device), 
                     batch['attention_mask'].to(device),
                     batch['image'].to(device), 
-                    batch['total_mass'].to(device)
+                    # batch['total_mass'].to(device)
                 ).view(-1)
-            metric.update(preds, batch['label'].to(device))
+            metric.update(preds*batch['total_mass'].to(device), batch['total_calories'].to(device))
 
     return metric.compute()

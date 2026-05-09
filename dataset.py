@@ -13,11 +13,12 @@ import random
 
 class MultimodalDataset(Dataset):
 
-    def __init__(self, config, transforms, df):
+    def __init__(self, config, transforms, df, mode="train"):
         self.df = df
         self.image_cfg = timm.get_pretrained_cfg(config.IMAGE_MODEL_NAME)
         self.tokenizer = AutoTokenizer.from_pretrained(config.TEXT_MODEL_NAME)
         self.transforms = transforms
+        self.mode = mode
 
     def __len__(self):
         return len(self.df)
@@ -25,11 +26,13 @@ class MultimodalDataset(Dataset):
     def __getitem__(self, idx):
         ingredients = self.df.loc[idx, "ingredients"]
         ingredients_arr =  ingredients.split(";")
-        random.shuffle(ingredients_arr)
-        ingredients = ", ".join(ingredients)
+        if self.mode == "train":
+            random.shuffle(ingredients_arr)
+        ingredients = ", ".join(ingredients_arr)
 
-        total_mass = torch.tensor(float(self.df.loc[idx, "total_mass"]) / 1500, dtype=torch.float32)
-        label = torch.tensor(self.df.loc[idx, "total_calories"], dtype=torch.float32)
+        total_mass = torch.tensor(float(self.df.loc[idx, "total_mass"]), dtype=torch.float32)
+        total_calories = torch.tensor(float(self.df.loc[idx, "total_calories"]), dtype=torch.float32)
+        label = torch.tensor(self.df.loc[idx, "total_calories"] / self.df.loc[idx, "total_mass"], dtype=torch.float32)
 
         img_path = self.df.loc[idx, "dish_id"]
         try:
@@ -40,13 +43,14 @@ class MultimodalDataset(Dataset):
                                                torch.float32)
 
         image = self.transforms(image=np.array(image))["image"]
-        return {"label": label, "image": image, "total_mass": total_mass, "ingredients": ingredients} 
+        return {"label": label, "image": image, "total_mass": total_mass, "total_calories": total_calories, "ingredients": ingredients} 
 
 
 
 def collate_fn(batch, tokenizer):
     ingredients = [item["ingredients"] for item in batch]
     total_mass = [item["total_mass"] for item in batch]
+    total_calories = [item["total_calories"] for item in batch]
     images = torch.stack([item["image"] for item in batch])
     labels = [item["label"] for item in batch]
 
@@ -59,6 +63,7 @@ def collate_fn(batch, tokenizer):
         "label": torch.tensor(labels),
         "image": images,
         "total_mass": torch.tensor(total_mass),
+        "total_calories": torch.tensor(total_calories),
         "input_ids": tokenized_input["input_ids"].squeeze(0),
         "attention_mask": tokenized_input["attention_mask"].squeeze(0)
     }
