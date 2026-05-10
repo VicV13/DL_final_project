@@ -1,14 +1,15 @@
-import os
 import numpy as np
-import pandas as pd
 from PIL import Image
 import timm
 import torch
-from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer
+from torch.utils.data import Dataset
 import albumentations as A
-from albumentations.pytorch import ToTensorV2
 import random
+
+"""
+Этап 2. Реализуйте пайплайн обучения
+Для корректной сборки монолитных py-файлов убедитесь, что в начале каждого файла собраны все нужные импорты.
+"""
 
 
 class MultimodalDataset(Dataset):
@@ -16,7 +17,6 @@ class MultimodalDataset(Dataset):
     def __init__(self, config, transforms, df, mode="train"):
         self.df = df
         self.image_cfg = timm.get_pretrained_cfg(config.IMAGE_MODEL_NAME)
-        self.tokenizer = AutoTokenizer.from_pretrained(config.TEXT_MODEL_NAME)
         self.transforms = transforms
         self.mode = mode
 
@@ -24,6 +24,7 @@ class MultimodalDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
+        # Переводим список ингридиентов в строку, а также перемешиваем их порядок для аугментации данных
         ingredients = self.df.loc[idx, "ingredients"]
         ingredients_arr =  ingredients.split(";")
         if self.mode == "train":
@@ -32,8 +33,10 @@ class MultimodalDataset(Dataset):
 
         total_mass = torch.tensor(float(self.df.loc[idx, "total_mass"]), dtype=torch.float32)
         total_calories = torch.tensor(float(self.df.loc[idx, "total_calories"]), dtype=torch.float32)
+        # Используем нормализованное значение total_calories/total_mass в качестве метки для обучения модели
         label = torch.tensor(self.df.loc[idx, "total_calories"] / self.df.loc[idx, "total_mass"], dtype=torch.float32)
 
+        # Обработка изображения
         img_path = self.df.loc[idx, "dish_id"]
         try:
             image = Image.open(f"data/images/{img_path}/rgb.jpg").convert('RGB')
@@ -41,10 +44,9 @@ class MultimodalDataset(Dataset):
             image = torch.randint(0, 255, (*self.image_cfg.input_size[1:],
                                            self.image_cfg.input_size[0])).to(
                                                torch.float32)
-
         image = self.transforms(image=np.array(image))["image"]
-        return {"label": label, "image": image, "total_mass": total_mass, "total_calories": total_calories, "ingredients": ingredients} 
 
+        return {"label": label, "image": image, "total_mass": total_mass, "total_calories": total_calories, "ingredients": ingredients} 
 
 
 def collate_fn(batch, tokenizer):
@@ -67,6 +69,7 @@ def collate_fn(batch, tokenizer):
         "input_ids": tokenized_input["input_ids"].squeeze(0),
         "attention_mask": tokenized_input["attention_mask"].squeeze(0)
     }
+
 
 def get_transforms(config, ds_type="train"):
     cfg = timm.get_pretrained_cfg(config.IMAGE_MODEL_NAME)
@@ -104,4 +107,3 @@ def get_transforms(config, ds_type="train"):
         )
 
     return transforms
-    

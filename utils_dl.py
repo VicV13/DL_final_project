@@ -11,6 +11,11 @@ from dataset import MultimodalDataset, collate_fn, get_transforms
 import os
 import numpy as np
 
+"""
+Этап 2. Реализуйте пайплайн обучения
+Для корректной сборки монолитных py-файлов убедитесь, что в начале каждого файла собраны все нужные импорты.
+"""
+
 def seed_everything(seed: int):
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -49,6 +54,10 @@ class MultimodalModel(nn.Module):
         self.text_proj = nn.Linear(self.text_encoder.config.hidden_size, config.HIDDEN_DIM)
         self.image_proj = nn.Linear(self.image_encoder.num_features, config.HIDDEN_DIM)
 
+
+        # Объединяем текстовые и визуальные признаки и пропускаем их через "голову" модели для
+        # получения предсказания калорийности блюда.
+        # Это задача регрессии, поэтому последний слой должен выдавать одно число.
         self.classifier = nn.Sequential(
             nn.Linear(config.HIDDEN_DIM * 2 , config.HIDDEN_DIM),
             nn.LayerNorm(config.HIDDEN_DIM),
@@ -69,8 +78,10 @@ class MultimodalModel(nn.Module):
         fused_emb = torch.cat([text_emb, image_emb], dim=1)
 
         return self.classifier(fused_emb)
-    
+
+
 def train(config, device, train_df, test_df):
+
     seed_everything(config.SEED)
 
     # Инициализация модели
@@ -127,17 +138,19 @@ def train(config, device, train_df, test_df):
                 batch['input_ids'].to(device), 
                 batch['attention_mask'].to(device),
                 batch['image'].to(device), 
-                # batch['total_mass'].to(device)
             ).view(-1)
-            metric_train.update(preds*batch['total_mass'].to(device), batch['total_calories'].to(device))
-            loss = criterion(preds, batch['label'].to(device))
+
+            total_preds = preds*batch['total_mass'].to(device)
+
+            metric_train.update(total_preds, batch['total_calories'].to(device))
+            loss = criterion(total_preds, batch['total_calories'].to(device))
             loss.backward()
             total_loss += loss.item()
 
-            if (i+1) % 32 == 0:
+            # Обновляем веса каждые 4 шага, чтобы стабилизировать обучение и уменьшить влияние шума в градиентах
+            if (i+1) % 4 == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-
 
         # Валидация
         train_mae = metric_train.compute()
@@ -146,7 +159,7 @@ def train(config, device, train_df, test_df):
         metric_train.reset()
 
         print(
-            f"Epoch {epoch}/{config.EPOCHS-1} | avg_Loss: {total_loss/len(train_loader):.4f} | Train F1: {train_mae :.4f}| Val F1: {val_mae :.4f}"
+            f"Epoch {epoch}/{config.EPOCHS-1} | avg_Loss: {total_loss/len(train_loader):.4f} | Train MAE: {train_mae :.4f}| Val MAE: {val_mae :.4f}"
         )
 
         if val_mae < best_val:
@@ -163,7 +176,6 @@ def validate(model, val_loader, device, metric):
                     batch['input_ids'].to(device), 
                     batch['attention_mask'].to(device),
                     batch['image'].to(device), 
-                    # batch['total_mass'].to(device)
                 ).view(-1)
             metric.update(preds*batch['total_mass'].to(device), batch['total_calories'].to(device))
 
