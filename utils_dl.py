@@ -143,11 +143,12 @@ def train(config, device, train_df, test_df):
             total_preds = preds*batch['total_mass'].to(device)
 
             metric_train.update(total_preds, batch['total_calories'].to(device))
-            loss = criterion(total_preds, batch['total_calories'].to(device))
+            loss = criterion(preds, batch['label'].to(device))
             loss.backward()
             total_loss += loss.item()
 
             # Обновляем веса каждые 4 шага, чтобы стабилизировать обучение и уменьшить влияние шума в градиентах
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) # Добавь это!
             if (i+1) % 4 == 0:
                 optimizer.step()
                 optimizer.zero_grad()
